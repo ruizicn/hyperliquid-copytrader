@@ -1,4 +1,4 @@
-﻿import fetch from "node-fetch"
+﻿
 import { HYPERLIQUID_INFO_URL, HYPERLIQUID_EXCHANGE_URL } from "./config.js"
 
 /**
