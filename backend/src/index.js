@@ -1,12 +1,24 @@
-﻿import "dotenv/config"
+import "dotenv/config"
 import express from "express"
 import cors from "cors"
 import http from "http"
 import { WebSocketServer } from "ws"
 import apiRoutes from "./routes/api.js"
+import { walletManager } from "./wallet.js"
 import { accountScanner } from "./scanner.js"
 import { copyEngine } from "./copier.js"
 import { PORT, REFERENCE_ADDRESS, SCAN_INTERVAL } from "./config.js"
+
+// 自动从环境变量初始化钱包
+walletManager.initialize().then(result => {
+  if (result) {
+    console.log("[Wallet] 已自动加载钱包: " + result.address)
+  } else {
+    console.log("[Wallet] 未配置私钥，可通过前端输入")
+  }
+}).catch(err => {
+  console.error("[Wallet] 钱包初始化失败: " + err.message)
+})
 
 const app = express()
 const server = http.createServer(app)
@@ -100,3 +112,4 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   process.exit(0)
 })
+

@@ -31,11 +31,12 @@ export class AccountScanner {
    * 完整扫描参考账户
    */
   async scanFull(address) {
-    const [state, mids, orders, fills] = await Promise.all([
+    const [state, mids, orders, fills, spotState] = await Promise.all([
       hyperliquidClient.getAccountState(address),
       hyperliquidClient.getAllMids(),
       hyperliquidClient.getOpenOrders(address),
-      hyperliquidClient.getFills(address)
+      hyperliquidClient.getFills(address),
+      hyperliquidClient.getSpotState(address).catch(() => ({ balances: [] }))
     ])
 
     // 结构化持仓数据
@@ -58,6 +59,7 @@ export class AccountScanner {
         leverage: pos.leverage?.value || 1,
         pnl: pnl,
         pnlPercent: pnlPercent,
+        returnOnEquity: pos.returnOnEquity ? (parseFloat(pos.returnOnEquity) * 100).toFixed(2) + "%" : (marginUsed > 0 ? (pnl / marginUsed * 100).toFixed(2) + "%" : "0%"),
         liquidationPrice: pos.liquidationPx,
         marginUsed: parseFloat(pos.marginUsed || "0"),
         cumFunding: pos.cumFunding,
@@ -100,13 +102,26 @@ export class AccountScanner {
       crossMaintenanceMargin: parseFloat(state.crossMaintenanceMarginUsed || "0"),
       positionCount: positions.length,
       totalPnl: positions.reduce((sum, p) => sum + p.pnl, 0),
-      openOrderCount: openOrders.length
+      openOrderCount: openOrders.length,
+      totalReturnRate: positions.length > 0 ? parseFloat((positions.reduce((sum, p) => sum + p.pnl, 0) / (positions.reduce((sum, p) => sum + p.marginUsed, 0) || 1) * 100).toFixed(2)) : 0
+    }
+
+    let spotBalances = []
+    if (spotState && spotState.balances) {
+      spotBalances = spotState.balances.map(b => ({
+        coin: b.coin,
+        token: b.token,
+        total: parseFloat(b.total || "0"),
+        hold: parseFloat(b.hold || "0"),
+        available: parseFloat(b.total || "0") - parseFloat(b.hold || "0")
+      }))
     }
 
     const result = {
       address: address,
       summary,
       positions,
+      spot: { balances: spotBalances, totalUSDC: (spotBalances.find(b => b.coin === "USDC")?.total || 0), total: spotBalances.reduce((s, b) => s + b.total, 0) },
       openOrders,
       recentFills,
       timestamp: Date.now()

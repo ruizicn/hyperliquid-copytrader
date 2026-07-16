@@ -83,34 +83,68 @@ router.get("/my/state", async (req, res) => {
       const entryValue = Math.abs(size) * entryPrice
       const pnl = parseFloat(pos.unrealizedPnl || "0")
       const pnlPercent = entryValue > 0 ? (pnl / entryValue) * 100 : 0
+      const marginUsed = parseFloat(pos.marginUsed || "0")
+
+      let returnOnEquity = "0%"
+      if (pos.returnOnEquity !== undefined && pos.returnOnEquity !== null) {
+        returnOnEquity = (parseFloat(pos.returnOnEquity) * 100).toFixed(2) + "%"
+      } else if (marginUsed > 0) {
+        returnOnEquity = (pnl / marginUsed * 100).toFixed(2) + "%"
+      }
 
       return {
-        coin: pos.coin,
-        size,
-        entryPrice,
-        currentPrice: midPrice,
-        positionValue,
-        leverage: pos.leverage?.value || 1,
-        pnl,
-        pnlPercent,
+        coin: pos.coin, size, entryPrice, currentPrice: midPrice,
+        positionValue, leverage: pos.leverage?.value || 1,
+        pnl, pnlPercent, returnOnEquity,
         liquidationPrice: pos.liquidationPx ? parseFloat(pos.liquidationPx) : null,
-        marginUsed: parseFloat(pos.marginUsed || "0"),
-        direction: size > 0 ? "LONG" : "SHORT",
+        marginUsed, direction: size > 0 ? "LONG" : "SHORT",
         type: pos.leverage?.type || "cross"
       }
     })
+
+    let spotBalances = []
+    try {
+      const spotRes = await hyperliquidClient.getSpotState(address)
+      if (spotRes && spotRes.balances) {
+        spotBalances = spotRes.balances.map(b => ({
+          coin: b.coin, token: b.token,
+          total: parseFloat(b.total || "0"),
+          hold: parseFloat(b.hold || "0"),
+          available: parseFloat(b.total || "0") - parseFloat(b.hold || "0")
+        }))
+      }
+    } catch (e) {}
+
+    const spotTotalUSDC = spotBalances.find(b => b.coin === "USDC")?.available || 0
+    const perpAccountValue = parseFloat(state.marginSummary?.accountValue || "0")
+    const perpTotalPnl = positions.reduce((s, p) => s + p.pnl, 0)
+    const initialCapital = perpAccountValue - perpTotalPnl
+    const copyReturnRate = initialCapital > 0 ? parseFloat((perpTotalPnl / initialCapital * 100).toFixed(2)) : 0
 
     res.json({
       success: true,
       data: {
         address,
         summary: {
-          accountValue: parseFloat(state.marginSummary?.accountValue || "0"),
+          accountValue: perpAccountValue,
           totalPositionValue: parseFloat(state.marginSummary?.totalNtlPos || "0"),
           totalMarginUsed: parseFloat(state.marginSummary?.totalMarginUsed || "0"),
           withdrawable: parseFloat(state.withdrawable || "0"),
           positionCount: positions.length,
-          totalPnl: positions.reduce((s, p) => s + p.pnl, 0)
+          totalPnl: perpTotalPnl,
+          perpAccountValue
+        },
+        spot: {
+          balances: spotBalances,
+          totalUSDC: spotTotalUSDC,
+          totalValue: spotBalances.reduce((s, b) => s + b.total, 0)
+        },
+        portfolio: {
+          totalEquity: spotTotalUSDC + Math.max(perpAccountValue, 0),
+          spotValue: spotTotalUSDC,
+          perpValue: perpAccountValue,
+          perpPnl: perpTotalPnl,
+          copyReturnRate
         },
         positions
       }
@@ -119,9 +153,6 @@ router.get("/my/state", async (req, res) => {
     res.status(500).json({ success: false, error: err.message })
   }
 })
-
-// ========================================
-// 钱包管理 API
 // ========================================
 
 /**
