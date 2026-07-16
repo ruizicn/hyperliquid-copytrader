@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 .env
 *.log
 dist/
@@ -7,3 +7,4 @@ dist/
 *.pyc
 __pycache__/
 *~
+.vercel/

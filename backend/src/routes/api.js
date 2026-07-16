@@ -259,6 +259,14 @@ router.post("/copier/close-position", async (req, res) => {
   }
 })
 
+
+// ========================================
+// 环境检测 API
+// ========================================
+
+router.get("/env", (req, res) => {
+  res.json({ success: true, isVercel: false, mode: "local" })
+})
 // ========================================
 // 市场数据 API
 // ========================================
@@ -276,3 +284,4 @@ router.get("/market/prices", async (req, res) => {
 })
 
 export default router
+

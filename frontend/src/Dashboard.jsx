@@ -1,6 +1,6 @@
 ﻿import { apiFetch, fmt } from "./api.js";
 
-export default function Dashboard({ refData, myData, loading, walletStatus, copierStatus, onRefreshRef, onRefreshMy, notify }) {
+export default function Dashboard({ refData, myData, loading, walletStatus, copierStatus, onRefreshRef, onRefreshMy, notify, isVercel }) {
   const toggleCopier = async () => {
     try {
       const ep = copierStatus.enabled ? "/copier/stop" : "/copier/start";
@@ -19,17 +19,20 @@ export default function Dashboard({ refData, myData, loading, walletStatus, copi
           {loading ? <div className="h-8 w-24 bg-gray-800 rounded animate-pulse my-1" /> : <div className="text-2xl font-semibold text-blue-400">{refData?.summary?.accountValue !== undefined ? fmt.usd(refData.summary.accountValue) : "-"}</div>}
           <div className="text-xs text-gray-500 mt-1">{refData?.summary?.positionCount || 0} \u4e2a\u6301\u4ed3</div>
         </div>
-        <div className="bg-gradient-to-br from-green-600/10 to-green-600/5 border border-green-900/30 rounded-xl p-5">
-          <div className="text-sm text-gray-400 mb-1">\u6211\u7684\u8d26\u6237</div>
-          {!myData ? <div className="h-8 w-24 bg-gray-800 rounded animate-pulse my-1" /> : <div className="text-2xl font-semibold text-green-400">{fmt.usd(myData?.summary?.accountValue)}</div>}
-          <div className="text-xs text-gray-500 mt-1">{walletStatus.isReady ? (myData?.summary?.positionCount || 0) + " \u4e2a\u6301\u4ed3" : "\u94b1\u5305\u672a\u8fde\u63a5"}</div>
-        </div>
+        {!isVercel && (
+          <div className="bg-gradient-to-br from-green-600/10 to-green-600/5 border border-green-900/30 rounded-xl p-5">
+            <div className="text-sm text-gray-400 mb-1">\u6211\u7684\u8d26\u6237</div>
+            {!myData ? <div className="h-8 w-24 bg-gray-800 rounded animate-pulse my-1" /> : <div className="text-2xl font-semibold text-green-400">{fmt.usd(myData?.summary?.accountValue)}</div>}
+            <div className="text-xs text-gray-500 mt-1">{walletStatus.isReady ? (myData?.summary?.positionCount || 0) + " \u4e2a\u6301\u4ed3" : "\u94b1\u5305\u672a\u8fde\u63a5"}</div>
+          </div>
+        )}
         <div className={"bg-gradient-to-br " + (copierStatus.enabled ? "from-green-600/10 to-green-600/5 border-green-900/30" : "from-yellow-600/10 to-yellow-600/5 border-yellow-900/30") + " border rounded-xl p-5"}>
-          <div className="text-sm text-gray-400 mb-1">\u8ddf\u5355\u72b6\u6001</div>
-          <div className={"text-2xl font-semibold " + (copierStatus.enabled ? "text-green-400" : "text-yellow-400")}>{copierStatus.enabled ? "\u8fd0\u884c\u4e2d" : "\u5df2\u505c\u6b62"}</div>
-          <div className="text-xs text-gray-500 mt-1">\u6bd4\u4f8b: {(copierStatus.config?.copyRatio || 0) * 100}%</div>
+          <div className="text-sm text-gray-400 mb-1">{isVercel ? "\u8ddf\u5355\u72b6\u6001" : "\u8ddf\u5355\u72b6\u6001"}</div>
+          <div className={"text-2xl font-semibold " + (copierStatus.enabled ? "text-green-400" : "text-yellow-400")}>{isVercel ? "\u672c\u5730\u8fd0\u884c" : (copierStatus.enabled ? "\u8fd0\u884c\u4e2d" : "\u5df2\u505c\u6b62")}</div>
+          <div className="text-xs text-gray-500 mt-1">{isVercel ? "\u53ea\u8bfb\u76d1\u63a7\u9762\u677f" : "\u6bd4\u4f8b: " + (copierStatus.config?.copyRatio || 0) * 100 + "%"}</div>
         </div>
       </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
           <h3 className="text-sm font-medium text-gray-400 mb-4">\u5feb\u901f\u64cd\u4f5c</h3>
@@ -38,25 +41,33 @@ export default function Dashboard({ refData, myData, loading, walletStatus, copi
               <button onClick={onRefreshRef} className="flex-1 px-4 py-2 bg-blue-600/20 text-blue-400 rounded-lg text-sm hover:bg-blue-600/30 border border-blue-600/30">
                 \u626b\u63cf\u53c2\u8003\u8d26\u6237
               </button>
-              <button onClick={onRefreshMy} disabled={!walletStatus.isReady} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40">
-                \u5237\u65b0\u6211\u7684\u6301\u4ed3
-              </button>
+              {!isVercel && (
+                <button onClick={onRefreshMy} disabled={!walletStatus.isReady} className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40">
+                  \u5237\u65b0\u6211\u7684\u6301\u4ed3
+                </button>
+              )}
             </div>
-            <div className="flex gap-2">
-              <button onClick={toggleCopier} className={"flex-1 px-4 py-2 rounded-lg text-sm border " + (copierStatus.enabled ? "bg-red-600/20 text-red-400 border-red-600/30 hover:bg-red-600/30" : "bg-green-600/20 text-green-400 border-green-600/30 hover:bg-green-600/30")}>
-                {copierStatus.enabled ? "\u505c\u6b62\u8ddf\u5355" : "\u542f\u52a8\u8ddf\u5355"}
-              </button>
-              <button onClick={closeAll} disabled={!walletStatus.isReady} className="flex-1 px-4 py-2 bg-red-600/20 text-red-400 rounded-lg text-sm border border-red-600/30 hover:bg-red-600/30 disabled:opacity-40">
-                \u5168\u90e8\u5e73\u4ed3
-              </button>
-            </div>
+            {!isVercel && (
+              <div className="flex gap-2">
+                <button onClick={toggleCopier} className={"flex-1 px-4 py-2 rounded-lg text-sm border " + (copierStatus.enabled ? "bg-red-600/20 text-red-400 border-red-600/30 hover:bg-red-600/30" : "bg-green-600/20 text-green-400 border-green-600/30 hover:bg-green-600/30")}>
+                  {copierStatus.enabled ? "\u505c\u6b62\u8ddf\u5355" : "\u542f\u52a8\u8ddf\u5355"}
+                </button>
+                <button onClick={closeAll} disabled={!walletStatus.isReady} className="flex-1 px-4 py-2 bg-red-600/20 text-red-400 rounded-lg text-sm border border-red-600/30 hover:bg-red-600/30 disabled:opacity-40">
+                  \u5168\u90e8\u5e73\u4ed3
+                </button>
+              </div>
+            )}
+            {isVercel && (
+              <div className="p-3 bg-blue-900/20 border border-blue-800/30 rounded-lg text-xs text-blue-400">
+                Vercel \u53ea\u8bfb\u6a21\u5f0f \u00b7 \u8ddf\u5355\u673a\u5668\u4eba\u9700\u5728\u672c\u5730\u8fd0\u884c
+              </div>
+            )}
           </div>
         </div>
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
           <h3 className="text-sm font-medium text-gray-400 mb-4">\u6301\u4ed3\u5feb\u7167</h3>
           {refData && <div className="space-y-2">
             {refData.positions.slice(0, 6).map((pos) => {
-              const myPos = myData?.positions?.find((p) => p.coin === pos.coin);
               return (
                 <div key={pos.coin} className="flex items-center justify-between text-sm py-1.5 border-b border-gray-800 last:border-0">
                   <div className="flex items-center gap-2">
@@ -67,7 +78,7 @@ export default function Dashboard({ refData, myData, loading, walletStatus, copi
                   </div>
                   <div className="text-right">
                     <div className="text-gray-300">{fmt.size(pos.size)}</div>
-                    <div className="text-xs text-gray-500">{myPos && myPos.size >= 0 ? "\u5df2\u8ddf\u5355" : "-"}</div>
+                    <div className="text-xs text-gray-500">{fmt.usd(pos.positionValue)}</div>
                   </div>
                 </div>
               );
