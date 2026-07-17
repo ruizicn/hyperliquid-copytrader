@@ -144,6 +144,16 @@ class CopyTradingEngine {
 
     const { copyRatio, maxCopyAmount } = this._config
 
+    let totalNeeded = 0;
+    for (const rp of refPositions) {
+      const cp = parseFloat(mids[rp.coin] || "0");
+      if (cp <= 0) continue;
+      const tv = Math.abs(rp.size * copyRatio) * cp;
+      if (tv >= this._config.minCopyAmount) totalNeeded += tv / rp.leverage;
+    }
+    const perpAvail = parseFloat(myState.withdrawable || "0");
+    if (perpAvail < totalNeeded) { this._ensurePerpBalance(totalNeeded).catch(() => {}); }
+
     for (const refPos of refPositions) {
       const coin = refPos.coin
       const targetSize = refPos.size * copyRatio // 按比例缩放
@@ -193,130 +203,109 @@ class CopyTradingEngine {
    * 使用 ethers Wallet 签名 EIP-712 结构化数据
    */
   async _placeOrder(coin, size, price, leverage) {
-    if (!walletManager.isReady()) {
-      throw new Error("钱包未就绪")
-    }
-    if (Math.abs(size) < 0.0001) return
+    if (!walletManager.isReady()) throw new Error("钱包未就绪");
+    if (Math.abs(size) < 0.0001) return;
 
     try {
-      const wallet = walletManager.getWallet()
-      const address = walletManager.getAddress()
+      const wallet = walletManager.getWallet();
+      const meta = await hyperliquidClient.getMetadata();
+      const coinIndex = meta.universe.findIndex(u => u.name === coin);
+      if (coinIndex === -1) throw new Error("Coin " + coin + " not found");
 
-      // 获取 coin 索引
-      const meta = await hyperliquidClient.getMetadata()
-      const coinIndex = (meta.universe || []).findIndex(u => u.name === coin)
-      if (coinIndex === -1) throw new Error(`Coin ${coin} not found`)
+      const isBuy = size > 0;
+      const absSize = Math.abs(size);
+      const nonce = Date.now();
+      const sd = meta.universe[coinIndex].szDecimals !== undefined ? meta.universe[coinIndex].szDecimals : 2;
+      const sf = Math.pow(10, sd);
+      let sz = Math.floor(Math.max(absSize, 10 / Math.max(price, 0.001)) * sf) / sf;
+      if (sz <= 0) sz = 1 / sf;
 
-      const isBuy = size > 0
-      const absSize = Math.abs(size)
+      const action = { type: "order", orders: [{ a: coinIndex, b: isBuy, p: Math.floor(price * 100) / 100 + "", s: sz + "", r: false, t: { limit: { tif: "Gtc" } } }], grouping: "na" };
 
-      // Hyperliquid 签名：
-      // 使用 EIP-712 签名的 L2 消息
-      const timestamp = Date.now()
-      const signatureChainId = "0x2105" // Arbitrum One: 42161
-
-      // 构建 order action
-      const action = {
-        orders: [{
-          a: coinIndex,
-          b: isBuy,
-          p: price.toString(),
-          s: absSize.toString(),
-          r: false,
-          t: { lmt: { tif: "Gtc" } } // limit order GTC
-        }],
-        grouping: "na",
-        trigger: undefined
-      }
-
-      // 构建 EIP-712 typed data
-      const domain = {
-        name: "Exchange",
-        version: "1",
-        chainId: 42161, // Arbitrum One
-        verifyingContract: "0x0000000000000000000000000000000000000000"
-      }
-
-      const types = {
-        "HyperliquidTransaction:ActionApproval": [
-          { name: "hyperliquidChain", type: "string" },
-          { name: "action", type: "HyperliquidTransaction:OrderAction" },
-          { name: "nonce", type: "uint64" },
-          { name: "signatureChainId", type: "string" }
-        ],
-        "HyperliquidTransaction:OrderAction": [
-          { name: "orders", type: "HyperliquidTransaction:Order[]" },
-          { name: "grouping", type: "string" },
-          { name: "trigger", type: "HyperliquidTransaction:Trigger?" }
-        ],
-        "HyperliquidTransaction:Order": [
-          { name: "a", type: "uint32" },
-          { name: "b", type: "bool" },
-          { name: "p", type: "string" },
-          { name: "s", type: "string" },
-          { name: "r", type: "bool" },
-          { name: "t", type: "HyperliquidTransaction:OrderType" }
-        ],
-        "HyperliquidTransaction:OrderType": [
-          { name: "limit", type: "HyperliquidTransaction:Limit?" },
-          { name: "trigger", type: "HyperliquidTransaction:Trigger?" }
-        ],
-        "HyperliquidTransaction:Limit": [
-          { name: "tif", type: "string" }
-        ],
-        "HyperliquidTransaction:Trigger": []
-      }
-
-      const message = {
-        hyperliquidChain: "Mainnet",
-        action: {
-          orders: action.orders,
-          grouping: "na",
-          trigger: { limit: undefined, trigger: undefined }
-        },
-        nonce: timestamp,
-        signatureChainId: signatureChainId
-      }
-
-      const signature = await wallet.signTypedData(domain, types, message)
-
-      // 发送到 exchange API
-      const payload = {
-        action: action,
-        nonce: timestamp,
-        signature: signature,
-        signatureChainId: signatureChainId
-      }
+      const { encode } = await import("@msgpack/msgpack");
+      const { keccak256, getBytes, TypedDataEncoder } = await import("ethers");
+      const packed = encode(action);
+      const nb = new Uint8Array(8);
+      const nbBig = BigInt(nonce);
+      for (let i = 0; i < 8; i++) nb[7 - i] = Number((nbBig >> BigInt(i * 8)) & BigInt(0xFF));
+      const comb = new Uint8Array(packed.length + 9);
+      comb.set(packed, 0); comb.set(nb, packed.length); comb[packed.length + 8] = 0;
+      const hash = keccak256(comb);
+      const domain = { name: "Exchange", version: "1", chainId: 1337, verifyingContract: "0x0000000000000000000000000000000000000000" };
+      const types = { "Agent": [{ name: "source", type: "string" }, { name: "connectionId", type: "bytes32" }] };
+      const msg = { source: "a", connectionId: hash };
+      const encoded = TypedDataEncoder.encode(domain, types, msg);
+      const digest = getBytes(keccak256(encoded));
+      const sig = wallet.signingKey.sign(digest);
+      const sigV = sig.v >= 27 ? sig.v - 27 : sig.v;
 
       const res = await fetch("https://api.hyperliquid.xyz/exchange", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "order",
-          request: payload,
-          signature: signature
-        })
-      })
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, nonce, signature: { r: sig.r, s: sig.s, v: sigV } })
+      });
 
-      if (!res.ok) {
-        const text = await res.text()
-        console.error(`[Copier] 下单失败 ${coin}:`, text)
-        return { success: false, error: text }
-      }
-
-      const result = await res.json()
-      console.log(`[Copier] 下单成功 ${coin}:`, JSON.stringify(result).substring(0, 100))
-      this._notify("order", { coin, size, price, isBuy, result })
-      return { success: true, data: result }
+      if (!res.ok) { const txt = await res.text(); console.error("[Copier] 下单失败 " + coin + ":", txt.substring(0,200)); return { success: false, error: txt }; }
+      const result = await res.json();
+      const hasErr = result.status === "err" || (result.response?.data?.statuses || []).some(s => s.error);
+      if (hasErr) console.error("[Copier] 下单返回错误 " + coin + ":", JSON.stringify(result).substring(0,300));
+      else console.log("[Copier] 下单成功 " + coin + ":", JSON.stringify(result).substring(0,200));
+      this._notify("order", { coin, size, price, isBuy, result });
+      return { success: true, data: result };
     } catch (err) {
-      console.error(`[Copier] 下单异常 ${coin}:`, err.message)
-      return { success: false, error: err.message }
+      console.error("[Copier] 下单异常 " + coin + ":", err.message);
+      return { success: false, error: err.message };
     }
   }
 
   /**
    * 手动平仓指定币种
    */
+  
+  async _ensurePerpBalance(neededAmount) {
+    if (!walletManager.isReady()) return false;
+    const address = walletManager.getAddress();
+    const state = await hyperliquidClient.getAccountState(address);
+    const perpAvail = parseFloat(state.withdrawable || "0");
+    if (perpAvail >= neededAmount) return true;
+    const shortfall = neededAmount - perpAvail;
+    if (shortfall <= 0) return true;
+    const spotRes = await hyperliquidClient.getSpotState(address);
+    const spotAvail = parseFloat(spotRes?.balances?.find(b => b.coin === "USDC")?.total || "0");
+    if (spotAvail <= 0) return false;
+    const transferAmount = Math.min(shortfall + 1, spotAvail);
+    console.log("[Copier] 从现货转入 " + transferAmount.toFixed(2) + " USDC");
+    const result = await this._usdTransfer(transferAmount, true);
+    return result.success;
+  }
+
+  async _usdTransfer(amount, toPerp) {
+    try {
+      const wallet = walletManager.getWallet();
+      const nonce = Date.now();
+      const chainId = parseInt("0x66eee");
+      const action = { type: "usdClassTransfer", amount: amount.toString(), toPerp, nonce, signatureChainId: "0x66eee", hyperliquidChain: "Mainnet" };
+      const domain = { name: "HyperliquidSignTransaction", version: "1", chainId, verifyingContract: "0x0000000000000000000000000000000000000000" };
+      const types = { "HyperliquidTransaction:UsdClassTransfer": [{ name: "hyperliquidChain", type: "string" }, { name: "amount", type: "string" }, { name: "toPerp", type: "bool" }, { name: "nonce", type: "uint64" }] };
+      const msg = { hyperliquidChain: "Mainnet", amount: amount.toString(), toPerp, nonce: BigInt(nonce) };
+      const sigHex = await wallet.signTypedData(domain, types, msg);
+      const clean = sigHex.replace("0x","");
+      const v = parseInt(clean.substring(128,130),16);
+      const sig = { r: "0x"+clean.substring(0,64), s: "0x"+clean.substring(64,128), v: v < 27 ? v+27 : v };
+      const res = await fetch("https://api.hyperliquid.xyz/exchange", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, nonce, signature: sig })
+      });
+      if (!res.ok) { const t = await res.text(); console.error("[Copier] 转账失败:", t.substring(0,200)); return { success: false, error: t }; }
+      const result = await res.json();
+      console.log("[Copier] 转账成功: " + amount + " USDC");
+      this._notify("transfer", { amount, toPerp, result });
+      return { success: true, data: result };
+    } catch (err) {
+      console.error("[Copier] 转账异常:", err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
   async closePosition(coin) {
     if (!walletManager.isReady()) throw new Error("钱包未就绪")
 
