@@ -1,5 +1,8 @@
-import { useState } from "react";
-import { apiFetch, fmt } from "./api.js";
+﻿import sys, os
+
+path = "C:/Users/LENOVO/Documents/跟单系统/frontend/src/Dashboard.jsx"
+
+content = r"""import { apiFetch, fmt } from "./api.js";
 
 // ---- 资产总览 ----
 function OverviewBar({ refData, myData, isVercel }) {
@@ -75,14 +78,11 @@ function ControlStrip({ copierStatus, notify, refData, myData, onRefreshMy, isVe
     try { const res = await apiFetch("/copier/close-all", { method: "POST" }); if (res.success) notify("已全部平仓", "success"); } catch (err) { notify(err.message, "error"); }
   };
 
-  const [ddPct, setDdPct] = useState(0);
-const refPnl = refData?.summary?.totalPnl || 0;
+  const refPnl = refData?.summary?.totalPnl || 0;
   const refRate = refData?.summary?.totalReturnRate;
   const myPnl = myData?.summary?.totalPnl || 0;
   const myRate = myData?.portfolio?.copyReturnRate;
   const refC = refData?.positions?.length || 0;
-  const ddLimit = copierStatus.config?.maxDrawdownPercent || 15;
-  const ddDaily = copierStatus.config?.maxDailyLossPercent || 8;
   const myC = myData?.positions?.length || 0;
 
   return (
@@ -95,7 +95,7 @@ const refPnl = refData?.summary?.totalPnl || 0;
             <span className={"text-xs font-medium " + (copierStatus.enabled ? "text-green-400" : "text-gray-500")}>
               {copierStatus.enabled ? "运行中" : "已停止"}
             </span>
-            <span className="text-[11px] text-gray-500">{(copierStatus.config?.copyRatio || 0) * 100}% {"·"} ${copierStatus.config?.minCopyAmount}~${copierStatus.config?.maxCopyAmount}</span>
+            <span className="text-[11px] text-gray-500">{(copierStatus.config?.copyRatio || 0) * 100}% {"\u00b7"} ${copierStatus.config?.minCopyAmount}~${copierStatus.config?.maxCopyAmount}</span>
           </div>
           <div className="flex gap-1.5">
             <button onClick={toggle} className={"px-3 py-1 text-[11px] font-medium rounded border transition-colors " + (copierStatus.enabled
@@ -114,14 +114,10 @@ const refPnl = refData?.summary?.totalPnl || 0;
       )}
 
       {/* 4格收益 */}
-      <div className={"grid text-center divide-x divide-gray-800/50 " + (isVercel ? "grid-cols-4" : "grid-cols-5")}>
+      <div className="grid grid-cols-4 text-center divide-x divide-gray-800/50">
         <div className="py-2.5 px-2">
           <div className="text-[10px] text-gray-500">参考 PnL</div>
           <div className={"text-xs font-semibold mt-0.5 " + (refPnl >= 0 ? "text-green-400" : "text-red-400")}>{fmt.pnl(refPnl)}</div>
-        </div>
-        <div className="py-2.5 px-2">
-          <div className="text-[10px] text-gray-500">止损线</div>
-          <div className="text-xs font-semibold mt-0.5 text-gray-300">① {ddLimit}% / ② {ddDaily}%</div>
         </div>
         <div className="py-2.5 px-2">
           <div className="text-[10px] text-gray-500">参考 ROE</div>
@@ -293,3 +289,8 @@ export default function Dashboard({ refData, myData, walletStatus, copierStatus,
     </div>
   );
 }
+"""
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write(content)
+print("Written successfully, length:", len(content))

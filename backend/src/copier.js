@@ -1,6 +1,8 @@
 ﻿import { hyperliquidClient } from "./hyperliquid.js"
 import { walletManager } from "./wallet.js"
 import { accountScanner } from "./scanner.js"
+import { encode as msgpackEncode } from "@msgpack/msgpack"
+import { keccak256, getBytes, TypedDataEncoder } from "ethers"
 import { COPY_RATIO, MIN_COPY_AMOUNT, MAX_COPY_AMOUNT } from "./config.js"
 
 /**
@@ -16,8 +18,13 @@ class CopyTradingEngine {
     this._config = {
       copyRatio: COPY_RATIO,
       minCopyAmount: MIN_COPY_AMOUNT,
-      maxCopyAmount: MAX_COPY_AMOUNT
+      maxCopyAmount: MAX_COPY_AMOUNT,
+      maxDrawdownPercent: 15,
+      maxDailyLossPercent: 8
     }
+    this._initialEquity = 0
+    this._dailyStartEquity = 0
+    this._lastDayCheck = Date.now()
     this._listeners = []
     this._lastSyncState = null
   }
@@ -55,6 +62,9 @@ class CopyTradingEngine {
     this._enabled = true
     this._notify("status", { enabled: true })
     console.log("[Copier] 跟单引擎已启动")
+    this._initialEquity = 0
+    this._dailyStartEquity = 0
+    this._lastDayCheck = new Date().toDateString()
     this._tick()
     return this
   }
@@ -100,7 +110,18 @@ class CopyTradingEngine {
       const myState = await hyperliquidClient.getAccountState(myAddress)
       const myMids = await hyperliquidClient.getAllMids()
 
-      // 3. 对比并执行同步
+      // 3. 风控检查
+      const stopReason = await this._checkStopLoss(myState)
+      if (stopReason) {
+        console.log("[Copier] 触发止损: " + stopReason)
+        await this.closeAllPositions()
+        this.stop()
+        this._notify("stoploss", { reason: stopReason })
+        this._scheduleNext()
+        return
+      }
+
+      // 4. 对比并执行同步
       await this._syncPositions(refState.positions, myState, myMids)
 
       this._lastSyncState = {
@@ -152,11 +173,11 @@ class CopyTradingEngine {
       if (tv >= this._config.minCopyAmount) totalNeeded += tv / rp.leverage;
     }
     const perpAvail = parseFloat(myState.withdrawable || "0");
-    if (perpAvail < totalNeeded) { this._ensurePerpBalance(totalNeeded).catch(() => {}); }
+    if (perpAvail < totalNeeded) { await this._ensurePerpBalance(totalNeeded); }
 
     for (const refPos of refPositions) {
       const coin = refPos.coin
-      const targetSize = refPos.size * copyRatio // 按比例缩放
+      let targetSize = refPos.size * copyRatio
       const currentPos = myPosMap[coin]
 
       // 计算当前价格下的目标价值
@@ -166,10 +187,9 @@ class CopyTradingEngine {
       const targetValue = Math.abs(targetSize) * currentPrice
       if (targetValue < this._config.minCopyAmount) continue
       if (targetValue > maxCopyAmount) {
-        // 按最大金额调整数量
-        const adjustedSize = (targetSize > 0 ? 1 : -1) * (maxCopyAmount / currentPrice)
-        // 这里简化为记录日志
-        console.log(`[Copier] ${coin}: 目标金额 ${targetValue.toFixed(2)} 超过最大限制 ${maxCopyAmount}，已调整`)
+        targetSize = (targetSize > 0 ? 1 : -1) * (maxCopyAmount / currentPrice)
+        targetValue = maxCopyAmount
+        console.log("[Copier] " + coin + ": target $" + targetValue.toFixed(2) + " capped to $" + maxCopyAmount)
       }
 
       // 检查是否需要调整持仓
@@ -220,11 +240,9 @@ class CopyTradingEngine {
       let sz = Math.floor(Math.max(absSize, 10 / Math.max(price, 0.001)) * sf) / sf;
       if (sz <= 0) sz = 1 / sf;
 
-      const action = { type: "order", orders: [{ a: coinIndex, b: isBuy, p: Math.floor(price * 100) / 100 + "", s: sz + "", r: false, t: { limit: { tif: "Gtc" } } }], grouping: "na" };
+      const action = { type: "order", orders: [{ a: coinIndex, b: isBuy, p: parseFloat(price.toFixed(6)).toString(), s: sz + "", r: false, t: { limit: { tif: "Gtc" } } }], grouping: "na" };
 
-      const { encode } = await import("@msgpack/msgpack");
-      const { keccak256, getBytes, TypedDataEncoder } = await import("ethers");
-      const packed = encode(action);
+      const packed = msgpackEncode(action);
       const nb = new Uint8Array(8);
       const nbBig = BigInt(nonce);
       for (let i = 0; i < 8; i++) nb[7 - i] = Number((nbBig >> BigInt(i * 8)) & BigInt(0xFF));
@@ -348,6 +366,33 @@ class CopyTradingEngine {
     this._notify("closeAll", results)
     return results
   }
+    _checkStopLoss(myState) {
+      const eq = parseFloat(myState.marginSummary?.accountValue || "0")
+      const cfg = this._config
+      // 每日重置
+      const today = new Date().toDateString()
+      if (this._lastDayCheck !== today) {
+        this._dailyStartEquity = eq
+        this._lastDayCheck = today
+      }
+      // 初始化初始净值
+      if (this._initialEquity === 0) this._initialEquity = eq
+      // 总回撤检查
+      if (this._initialEquity > 0) {
+        const lossPct = ((this._initialEquity - eq) / this._initialEquity) * 100
+        if (lossPct >= cfg.maxDrawdownPercent) {
+          return "总回撤 " + lossPct.toFixed(1) + "% 超过限制 " + cfg.maxDrawdownPercent + "%"
+        }
+      }
+      // 每日亏损检查
+      if (this._dailyStartEquity > 0) {
+        const dayLossPct = ((this._dailyStartEquity - eq) / this._dailyStartEquity) * 100
+        if (dayLossPct >= cfg.maxDailyLossPercent) {
+          return "当日亏损 " + dayLossPct.toFixed(1) + "% 超过限制 " + cfg.maxDailyLossPercent + "%"
+        }
+      }
+      return null
+    }
 }
 
-export const copyEngine = new CopyTradingEngine()
+export const copyEngine = new CopyTradingEngine()
